@@ -21,19 +21,6 @@ This project deploys an automated system to monitor and report AWS Lambda functi
 - AWS CLI installed and configured
 - Required IAM permissions to deploy CloudFormation stacks
 
-## Files Structure
-
-```
-.
-├── README.md
-├── cloudformation/
-│   └── lambda-runtime-monitor-ses-notifier.yml
-├── diagrams/
-│   └── lambda-runtime-monitor-architecture.mmd
-└── docs/
-    └── deployment-guide.md
-```
-
 ## Quick Start
 
 1. **Verify SES Email**
@@ -45,7 +32,7 @@ aws ses verify-email-identity --email-address your-sender@example.com
 ```bash
 aws cloudformation create-stack \
   --stack-name deprecated-runtime-checker \
-  --template-body file://cloudformation/lambda-runtime-monitor-ses-notifier.yml \
+  --template-body file://cloudformation/deprecated-runtime-notification-system.yml \
   --capabilities CAPABILITY_IAM \
   --parameters \
     ParameterKey=EmailRecipient,ParameterValue=recipient@example.com \
@@ -134,23 +121,6 @@ Common issues and solutions:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Authors
-
-Your Name/Organization
-
-## Acknowledgments
-
-- AWS Documentation
-- AWS Support
-- Community Contributors
-
-## Support
-
-For support, please:
-1. Check existing GitHub issues
-2. Review CloudWatch Logs
-3. Open a new GitHub issue
 
 ---
 
