@@ -3,7 +3,7 @@
 This project deploys an automated system to monitor and report AWS Lambda functions using deprecated runtimes across your AWS account.
 
 ## Architecture
-![Lambda Runtime Monitor Architecture](./lambda-runtime-monitor-architecture.mmd)
+![Lambda Runtime Monitor Architecture](./diagram-single-account.png)
 
 ## Features
 
