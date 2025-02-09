@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Multi-account Lambda runtime monitor for specific Organization Units'
+
+Parameters:
+  OrganizationUnitId:
+    Type: String
+    Description: 'ID of the Organization Unit to monitor'
+  
+  EmailRecipient:
+    Type: String
+    Description: 'Email address to receive notifications'
+    
+  EmailSender:
+    Type: String
+    Description: 'Verified SES email address to send from'
+    
+  CrossAccountRoleName:
+    Type: String
+    Default: 'LambdaRuntimeMonitorRole'
+    Description: 'Name of the IAM role to be created in member accounts'
+
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: OrganizationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'organizations:ListAccountsForParent'
+                  - 'organizations:ListOrganizationalUnitsForParent'
+                Resource: '*'
+        - PolicyName: CrossAccountAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'sts:AssumeRole'
+                Resource: !Sub 'arn:aws:iam::*:role/${CrossAccountRoleName}'
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ses:SendEmail'
+                  - 'ses:SendRawEmail'
+                Resource: '*'
+
+  RuntimeMonitorFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+          from datetime import datetime
+          from botocore.exceptions import ClientError
+
+          def get_accounts_in_ou(ou_id):
+              org_client = boto3.client('organizations')
+              accounts = []
+              
+              try:
+                  paginator = org_client.get_paginator('list_accounts_for_parent')
+                  for page in paginator.paginate(ParentId=ou_id):
+                      accounts.extend(page['Accounts'])
+                  return accounts
+              except Exception as e:
+                  print(f"Error getting accounts: {str(e)}")
+                  return []
+
+          def check_runtime_in_account(account_id, role_name):
+              sts_client = boto3.client('sts')
+              try:
+                  assumed_role = sts_client.assume_role(
+                      RoleArn=f'arn:aws:iam::{account_id}:role/{role_name}',
+                      RoleSessionName='LambdaRuntimeCheck'
+                  )
+                  
+                  credentials = assumed_role['Credentials']
+                  support_client = boto3.client(
+                      'support',
+                      aws_access_key_id=credentials['AccessKeyId'],
+                      aws_secret_access_key=credentials['SecretAccessKey'],
+                      aws_session_token=credentials['SessionToken']
+                  )
+                  
+                  check_result = support_client.describe_trusted_advisor_check_result(
+                      checkId='L4dfs2Q3C2',
+                      language='en'
+                  )
+                  
+                  lambda_client = boto3.client(
+                      'lambda',
+                      aws_access_key_id=credentials['AccessKeyId'],
+                      aws_secret_access_key=credentials['SecretAccessKey'],
+                      aws_session_token=credentials['SessionToken']
+                  )
+                  
+                  deprecated_functions = []
+                  
+                  if 'result' in check_result and 'flaggedResources' in check_result['result']:
+                      for resource in check_result['result']['flaggedResources']:
+                          function_info = {
+                              'account_id': account_id,
+                              'function_name': resource['metadata'][1],
+                              'runtime': resource['metadata'][2],
+                              'region': resource['region'],
+                              'status': resource['status']
+                          }
+                          
+                          try:
+                              tags = lambda_client.list_tags(
+                                  Resource=f"arn:aws:lambda:{resource['region']}:{account_id}:function:{resource['metadata'][1]}"
+                              )
+                              function_info['appid'] = tags.get('Tags', {}).get('APPID', 'No APPID tag')
+                          except Exception as e:
+                              function_info['appid'] = 'Error getting APPID tag'
+                          
+                          deprecated_functions.append(function_info)
+                  
+                  return deprecated_functions
+                  
+              except Exception as e:
+                  print(f"Error checking account {account_id}: {str(e)}")
+                  return []
+
+          def send_email(results):
+              ses = boto3.client('ses')
+              
+              body_html = """
+              <html>
+              <head>
+                <style>
+                  table { border-collapse: collapse; width: 100%; }
+                  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                  th { background-color: #f2f2f2; }
+                </style>
+              </head>
+              <body>
+                  <h2>Multi-Account Deprecated Lambda Runtimes Report</h2>
+                  <table>
+                      <tr>
+                          <th>Account ID</th>
+                          <th>Function Name</th>
+                          <th>Runtime</th>
+                          <th>Region</th>
+                          <th>Status</th>
+                          <th>APPID</th>
+                      </tr>
+              """
+              
+              for function in results:
+                  body_html += f"""
+                  <tr>
+                      <td>{function['account_id']}</td>
+                      <td>{function['function_name']}</td>
+                      <td>{function['runtime']}</td>
+                      <td>{function['region']}</td>
+                      <td>{function['status']}</td>
+                      <td>{function['appid']}</td>
+                  </tr>
+                  """
+              
+              body_html += """
+                  </table>
+              </body>
+              </html>
+              """
+              
+              try:
+                  ses.send_email(
+                      Source=os.environ['EMAIL_SENDER'],
+                      Destination={'ToAddresses': [os.environ['EMAIL_RECIPIENT']]},
+                      Message={
+                          'Subject': {'Data': 'Multi-Account Deprecated Lambda Runtimes Report'},
+                          'Body': {'Html': {'Data': body_html}}
+                      }
+                  )
+                  return True
+              except Exception as e:
+                  print(f"Error sending email: {str(e)}")
+                  return False
+
+          def lambda_handler(event, context):
+              ou_id = os.environ['ORGANIZATION_UNIT_ID']
+              role_name = os.environ['CROSS_ACCOUNT_ROLE_NAME']
+              
+              accounts = get_accounts_in_ou(ou_id)
+              all_results = []
+              
+              for account in accounts:
+                  results = check_runtime_in_account(account['Id'], role_name)
+                  all_results.extend(results)
+              
+              if all_results:
+                  email_sent = send_email(all_results)
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Deprecated Lambda runtimes found',
+                          'results': all_results,
+                          'email_sent': email_sent
+                      })
+                  }
+              else:
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'No deprecated Lambda runtimes found',
+                          'results': []
+                      })
+                  }
+
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          ORGANIZATION_UNIT_ID: !Ref OrganizationUnitId
+          CROSS_ACCOUNT_ROLE_NAME: !Ref CrossAccountRoleName
+          EMAIL_RECIPIENT: !Ref EmailRecipient
+          EMAIL_SENDER: !Ref EmailSender
+
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Schedule for checking deprecated Lambda runtimes across accounts"
+      ScheduleExpression: "rate(1 day)"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt RuntimeMonitorFunction.Arn
+          Id: "CheckDeprecatedRuntimesSchedule"
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RuntimeMonitorFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt ScheduledRule.Arn
+
+Outputs:
+  LambdaFunctionArn:
+    Description: "ARN of the Lambda function"
+    Value: !GetAtt RuntimeMonitorFunction.Arn
+  LambdaFunctionName:
+    Description: "Name of the Lambda function"
+    Value: !Ref RuntimeMonitorFunction
