@@ -102,7 +102,7 @@ Resources:
                   )
                   
                   check_result = support_client.describe_trusted_advisor_check_result(
-                      checkId='L4dfs2Q3C2',
+                      checkId='L4dfs2Q4C5',
                       language='en'
                   )
                   
