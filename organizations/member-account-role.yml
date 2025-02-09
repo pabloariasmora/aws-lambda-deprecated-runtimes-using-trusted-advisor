@@ -1,0 +1,76 @@
+# member-account-role.yml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM role for Lambda Runtime Monitor in member accounts'
+
+Parameters:
+  ManagementAccountId:
+    Type: String
+    Description: 'AWS Account ID of the management account where the Lambda function runs'
+    AllowedPattern: '^[0-9]{12}$'
+    ConstraintDescription: 'Must be a valid 12-digit AWS account ID'
+  
+  RoleName:
+    Type: String
+    Default: 'LambdaRuntimeMonitorRole'
+    Description: 'Name of the IAM role to be created'
+    MinLength: 1
+    MaxLength: 64
+    AllowedPattern: '^[\w+=,.@-]+$'
+    ConstraintDescription: 'Must be valid IAM role name'
+
+  OrganizationId:
+    Type: String
+    Description: 'AWS Organizations ID (e.g., o-xxxxxxxx)'
+    AllowedPattern: '^o-[a-z0-9]{8,32}$'
+    ConstraintDescription: 'Must be a valid AWS Organizations ID'
+
+Resources:
+  MemberAccountRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Ref RoleName
+      Description: 'Cross-account role for Lambda Runtime Monitor'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountId}:root'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:PrincipalOrgID': !Ref OrganizationId
+      Policies:
+        - PolicyName: TrustedAdvisorAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'support:*'
+                Resource: '*'
+        - PolicyName: LambdaTagAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:ListTags'
+                  - 'lambda:ListFunctions'
+                Resource: '*'
+      MaxSessionDuration: 3600
+      Tags:
+        - Key: Purpose
+          Value: LambdaRuntimeMonitoring
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: CreatedBy
+          Value: RuntimeMonitorStackSet
+
+Outputs:
+  RoleARN:
+    Description: 'ARN of the created IAM role'
+    Value: !GetAtt MemberAccountRole.Arn
+  RoleName:
+    Description: 'Name of the created IAM role'
+    Value: !Ref MemberAccountRole
