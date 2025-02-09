@@ -1,0 +1,43 @@
+```mermaid
+graph TB
+    subgraph AWS Cloud
+        EB[EventBridge<br>Daily Trigger] --> LF[Lambda Function<br>Runtime Monitor]
+        
+        subgraph Data Collection
+            LF --> TA[Trusted Advisor API]
+            LF --> LT[Lambda List Tags API]
+        end
+        
+        subgraph Notification
+            LF --> SES[Amazon SES]
+            SES --> EMAIL[Email Recipient]
+        end
+        
+        subgraph Monitoring
+            LF --> CW[CloudWatch Logs]
+        end
+        
+        subgraph IAM Permissions
+            IAM[IAM Role] -.-> LF
+            IAM --> |Allows| TA
+            IAM --> |Allows| SES
+            IAM --> |Allows| LT
+            IAM --> |Allows| CW
+        end
+        
+        subgraph Resources Monitored
+            TA --> |Checks| L1[Lambda Function 1]
+            TA --> |Checks| L2[Lambda Function 2]
+            TA --> |Checks| L3[Lambda Function n]
+        end
+    end
+
+    style AWS Cloud fill:#f9f9f9,stroke:#888
+    style LF fill:#FF9900,stroke:#000
+    style TA fill:#3F8624,stroke:#000
+    style SES fill:#CC2264,stroke:#000
+    style EB fill:#CD2264,stroke:#000
+    style CW fill:#518DCA,stroke:#000
+    style IAM fill:#D6242D,stroke:#000
+
+```
