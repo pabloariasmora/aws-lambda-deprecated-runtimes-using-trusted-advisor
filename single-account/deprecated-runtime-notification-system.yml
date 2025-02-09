@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to deploy Lambda function for checking deprecated runtimes and sending email notification'
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: 'check-deprecated-lambda-runtimes'
+    Description: Name of the Lambda function
+  
+  EmailRecipient:
+    Type: String
+    Description: 'Email address to receive notifications'
+    
+  EmailSender:
+    Type: String
+    Description: 'Verified SES email address to send from'
+
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: TrustedAdvisorAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'support:DescribeTrustedAdvisorCheckResult'
+                Resource: '*'
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ses:SendEmail'
+                  - 'ses:SendRawEmail'
+                Resource: '*'
+        - PolicyName: LambdaTagAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:ListTags'
+                  - 'sts:GetCallerIdentity'
+                Resource: '*'
+
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref FunctionName
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          from datetime import datetime
+          import os
+
+          def get_deprecated_lambda_runtimes():
+              trusted_advisor = boto3.client('support')
+              
+              try:
+                  #Deprecated Runtime Check
+                  check_id = 'L4dfs2Q4C5'
+                  
+                  check_result = trusted_advisor.describe_trusted_advisor_check_result(
+                      checkId=check_id,
+                      language='en'
+                  )
+                  
+                  deprecated_functions = []
+                  
+                  if 'result' in check_result and 'flaggedResources' in check_result['result']:
+                      for resource in check_result['result']['flaggedResources']:
+                          function_info = {
+                              'function_name': resource['metadata'][1],
+                              'runtime': resource['metadata'][2],
+                              'region': resource['region'],
+                              'status': resource['status']
+                          }
+                          
+                          # # Get the APPID tag for the Lambda function
+                          # try:
+                          #     lambda_client = boto3.client('lambda', region_name=resource['region'])
+                          #     tags_response = lambda_client.list_tags(
+                          #         Resource=f"arn:aws:lambda:{resource['region']}:{boto3.client('sts').get_caller_identity()['Account']}:function:{resource['metadata'][1]}"
+                          #     )
+                          #     
+                          #     # Add APPID tag if it exists
+                          #     function_info['appid'] = tags_response.get('Tags', {}).get('APPID', 'No APPID tag')
+                          # except Exception as e:
+                          #     print(f"Error getting tags for function {resource['metadata'][1]}: {str(e)}")
+                          #     function_info['appid'] = 'Error getting APPID tag'
+                          
+                          deprecated_functions.append(function_info)
+                  
+                  return deprecated_functions
+                  
+              except Exception as e:
+                  print(f"Error occurred: {str(e)}")
+                  return None
+
+          def send_email(results):
+              ses = boto3.client('ses')
+              
+              # Create the email body
+              body_html = """
+              <html>
+              <head>
+                <style>
+                  table {
+                    border-collapse: collapse;
+                    width: 100%;
+                    margin-bottom: 20px;
+                  }
+                  th, td {
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                  }
+                  th {
+                    background-color: #f2f2f2;
+                  }
+                  tr:nth-child(even) {
+                    background-color: #f9f9f9;
+                  }
+                  tr:hover {
+                    background-color: #f5f5f5;
+                  }
+                </style>
+              </head>
+              <body>
+                  <h2>Deprecated Lambda Runtimes Report</h2>
+                  <p>The following Lambda functions are using deprecated runtimes:</p>
+                  <table>
+                      <tr>
+                          <th>Function Name</th>
+                          <th>Runtime</th>
+                          <th>Region</th>
+                          <th>Status</th>
+                          <th>APPID</th>
+                      </tr>
+              """
+              
+              for function in results:
+                  body_html += f"""
+                  <tr>
+                      <td>{function['function_name']}</td>
+                      <td>{function['runtime']}</td>
+                      <td>{function['region']}</td>
+                      <td>{function['status']}</td>
+                      <td>{function.get('appid', 'No APPID tag')}</td>
+                  </tr>
+                  """
+              
+              body_html += """
+                  </table>
+                  <p>Please review these functions and update them to supported runtimes.</p>
+              </body>
+              </html>
+              """
+              
+              try:
+                  response = ses.send_email(
+                      Source=os.environ['EMAIL_SENDER'],
+                      Destination={
+                          'ToAddresses': [
+                              os.environ['EMAIL_RECIPIENT']
+                          ]
+                      },
+                      Message={
+                          'Subject': {
+                              'Data': 'Deprecated Lambda Runtimes Report'
+                          },
+                          'Body': {
+                              'Html': {
+                                  'Data': body_html
+                              }
+                          }
+                      }
+                  )
+                  return True
+              except Exception as e:
+                  print(f"Error sending email: {str(e)}")
+                  return False
+
+          def lambda_handler(event, context):
+              results = get_deprecated_lambda_runtimes()
+              
+              if results:
+                  email_sent = send_email(results)
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Deprecated Lambda runtimes found',
+                          'functions': results,
+                          'email_sent': email_sent
+                      })
+                  }
+              else:
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'No deprecated Lambda runtimes found or error occurred',
+                          'functions': []
+                      })
+                  }
+
+      Runtime: python3.9
+      Timeout: 60
+      MemorySize: 128
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+          EMAIL_RECIPIENT: !Ref EmailRecipient
+          EMAIL_SENDER: !Ref EmailSender
+
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Schedule for checking deprecated Lambda runtimes"
+      ScheduleExpression: "rate(1 day)"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt LambdaFunction.Arn
+          Id: "CheckDeprecatedRuntimesSchedule"
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt ScheduledRule.Arn
+
+Outputs:
+  LambdaFunctionArn:
+    Description: "ARN of the Lambda function"
+    Value: !GetAtt LambdaFunction.Arn
+  LambdaFunctionName:
+    Description: "Name of the Lambda function"
+    Value: !Ref LambdaFunction
