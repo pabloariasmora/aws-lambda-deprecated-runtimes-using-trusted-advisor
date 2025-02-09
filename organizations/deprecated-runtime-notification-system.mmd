@@ -1,0 +1,44 @@
+```mermaid
+graph TB
+    subgraph AWS Management Account
+        EB[EventBridge<br>Daily Trigger] --> LF[Lambda Function<br>Runtime Monitor]
+        LF --> ORG[Organizations API]
+        ORG --> |List Accounts in OU| LF
+        
+        subgraph Cross Account Access
+            LF --> AR[Assume Role in<br>Member Accounts]
+            AR --> TA1[Trusted Advisor<br>Account 1]
+            AR --> TA2[Trusted Advisor<br>Account 2]
+            AR --> TAN[Trusted Advisor<br>Account N]
+        end
+        
+        subgraph Data Collection
+            TA1 & TA2 & TAN --> |Results| LF
+            LF --> |List Tags| AR
+        end
+        
+        subgraph Reporting
+            LF --> SES[Amazon SES]
+            SES --> EMAIL[Email Recipients]
+        end
+        
+        subgraph Monitoring
+            LF --> CW[CloudWatch Logs]
+        end
+    end
+    
+    subgraph AWS Organization
+        OU[Organization Unit<br>Parameter] --> |Filter| ORG
+    end
+
+style AWS Cloud fill:#f9f9f9,stroke:#888
+style LF fill:#FF9900,stroke:#000
+style TA1 fill:#3F8624,stroke:#000
+style TA2 fill:#3F8624,stroke:#000
+style TAN fill:#3F8624,stroke:#000
+style SES fill:#CC2264,stroke:#000
+style EB fill:#CD2264,stroke:#000
+style CW fill:#518DCA,stroke:#000
+style ORG fill:#E7157B,stroke:#000
+
+```
