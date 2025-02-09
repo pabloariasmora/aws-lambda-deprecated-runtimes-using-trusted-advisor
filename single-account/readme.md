@@ -1,6 +1,3 @@
-Here's a comprehensive README.md file for the project:
-
-```markdown
 # Lambda Runtime Monitor
 
 This project deploys an automated system to monitor and report AWS Lambda functions using deprecated runtimes across your AWS account.
@@ -158,24 +155,3 @@ For support, please:
 ---
 
 **Note**: This system requires AWS Business or Enterprise Support for Trusted Advisor API access.
-```
-
-This README.md includes:
-
-1. Clear project description
-2. Quick start guide
-3. Detailed configuration options
-4. Troubleshooting steps
-5. Security considerations
-6. Cost implications
-7. Contributing guidelines
-8. Support information
-
-You might want to customize:
-- License information
-- Author details
-- Specific deployment requirements for your organization
-- Additional security considerations
-- Specific cost estimates for your use case
-
-Would you like me to expand on any section or add additional information?
